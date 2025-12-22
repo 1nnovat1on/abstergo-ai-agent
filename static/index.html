@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autonomous UI Agent (Gemini)</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 0; }
+    header { padding: 16px; background: #1e293b; display: flex; align-items: center; justify-content: space-between; }
+    main { padding: 16px; max-width: 1000px; margin: 0 auto; }
+    section { background: #1f2937; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
+    label { display: block; margin-bottom: 8px; }
+    input, select { width: 100%; padding: 8px; margin-top: 4px; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; border-radius: 4px; }
+    button { padding: 10px 16px; border: none; border-radius: 4px; background: #6366f1; color: white; cursor: pointer; margin-right: 8px; }
+    button.secondary { background: #ef4444; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .pill { padding: 6px 12px; border-radius: 999px; font-weight: bold; display: inline-block; }
+    .status-active { background: #22c55e22; color: #22c55e; }
+    .status-sleep { background: #fbbf2422; color: #fbbf24; }
+    .status-stop { background: #ef444422; color: #ef4444; }
+    pre { background: #0f172a; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    small { color: #94a3b8; }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Autonomous UI Agent (Gemini)</h1>
+    <small>Eyes on demand, hands on the keyboard + mouse</small>
+  </div>
+  <div>
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" class="secondary">Stop</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>Configuration</h2>
+    <div class="grid">
+      <label>Mode
+        <select id="mode">
+          <option value="GOAL">Goal Mode</option>
+          <option value="FREEROAM">Free Roam</option>
+        </select>
+      </label>
+      <label>Goal / Intent
+        <input id="goal" placeholder="e.g., Draft a poem in Word" />
+      </label>
+      <label>Active window start (HH:MM)
+        <input id="activeStart" placeholder="08:00" />
+      </label>
+      <label>Active window stop (HH:MM)
+        <input id="activeStop" placeholder="18:00" />
+      </label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Status</h2>
+    <div class="grid">
+      <div>
+        <div>Agent status</div>
+        <div id="status" class="pill status-stop">STOPPED</div>
+      </div>
+      <div>
+        <div>Last action time</div>
+        <div id="lastActionTime">-</div>
+      </div>
+      <div>
+        <div>Current goal</div>
+        <div id="currentGoal">-</div>
+      </div>
+      <div>
+        <div>Inner monologue</div>
+        <div id="monologue">-</div>
+      </div>
+      <div>
+        <div>Emotion vector</div>
+        <small id="emotions">-</small>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Recent actions</h2>
+    <pre id="logs">No actions yet.</pre>
+  </section>
+</main>
+
+<script>
+const statusEl = document.getElementById('status');
+const lastActionTimeEl = document.getElementById('lastActionTime');
+const currentGoalEl = document.getElementById('currentGoal');
+const monologueEl = document.getElementById('monologue');
+const emotionsEl = document.getElementById('emotions');
+const logsEl = document.getElementById('logs');
+
+async function refreshState() {
+  const res = await fetch('/api/state');
+  const data = await res.json();
+  statusEl.textContent = data.agent_status;
+  statusEl.className = 'pill ' + (data.agent_status === 'ACTIVE' ? 'status-active' : data.agent_status === 'SLEEPING' ? 'status-sleep' : 'status-stop');
+  lastActionTimeEl.textContent = data.last_action_time || '—';
+  currentGoalEl.textContent = data.current_goal || '—';
+  monologueEl.textContent = data.inner_monologue_summary || '—';
+  emotionsEl.textContent = (data.emotion_vector || []).map(v => v.toFixed(2)).join(' · ');
+}
+
+async function refreshLogs() {
+  const res = await fetch('/api/logs');
+  const data = await res.json();
+  if (!data.length) {
+    logsEl.textContent = 'No actions yet.';
+    return;
+  }
+  logsEl.textContent = data.map(entry => `${entry.ts}: ${entry.summary}`).join('\n');
+}
+
+async function startAgent() {
+  const payload = {
+    mode: document.getElementById('mode').value,
+    goal: document.getElementById('goal').value,
+    active_start: document.getElementById('activeStart').value || null,
+    active_stop: document.getElementById('activeStop').value || null,
+  };
+  await fetch('/api/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  refreshState();
+}
+
+async function stopAgent() {
+  await fetch('/api/stop', { method: 'POST' });
+  refreshState();
+}
+
+document.getElementById('startBtn').addEventListener('click', startAgent);
+document.getElementById('stopBtn').addEventListener('click', stopAgent);
+
+setInterval(refreshState, 3000);
+setInterval(refreshLogs, 5000);
+refreshState();
+refreshLogs();
+</script>
+</body>
+</html>
