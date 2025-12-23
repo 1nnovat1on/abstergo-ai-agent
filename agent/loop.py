@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from .actions import parse_actions
 from .controller import ActionExecutor
-from .gemini_client import GeminiPlanner
+from .planners.factory import create_planner
 from .platform import PlatformAdapter, Screenshot, default_adapter
 from .state import StateManager, utc_now
 from .storage import log_action, snapshot_state
@@ -17,7 +17,7 @@ from .storage import log_action, snapshot_state
 class AgentOrchestrator:
     def __init__(self, state_path: Path, data_dir: Path, adapter: Optional[PlatformAdapter] = None) -> None:
         self.state_manager = StateManager(state_path)
-        self.planner = GeminiPlanner()
+        self.planner = create_planner()
         self.adapter = adapter or default_adapter()
         self.executor = ActionExecutor(self.adapter)
         self.data_dir = data_dir
