@@ -1,3 +1,4 @@
+# actions.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,6 +42,9 @@ ACTION_SCHEMA = {
                         "type": "array",
                         "items": {"type": "string"},
                     },
+                    # Optional: allows things like Alt+Tab twice, or holding modifier keys briefly
+                    "repeat": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "hold_ms": {"type": "integer", "minimum": 0, "maximum": 2000},
                     "scroll": {
                         "type": "object",
                         "properties": {
@@ -78,6 +82,9 @@ class ActionStep:
     keys: Optional[List[str]] = None
     scroll: Optional[Dict[str, float]] = None
     wait_seconds: float = 0.0
+    # Hotkey helpers
+    repeat: int = 1
+    hold_ms: int = 0
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ActionStep":
@@ -89,6 +96,27 @@ class ActionStep:
                 width=target_data.get("width"),
                 height=target_data.get("height"),
             )
+
+        repeat = data.get("repeat", 1)
+        hold_ms = data.get("hold_ms", 0)
+        try:
+            repeat = int(repeat)
+        except Exception:
+            repeat = 1
+        try:
+            hold_ms = int(hold_ms)
+        except Exception:
+            hold_ms = 0
+
+        if repeat < 1:
+            repeat = 1
+        if repeat > 10:
+            repeat = 10
+        if hold_ms < 0:
+            hold_ms = 0
+        if hold_ms > 2000:
+            hold_ms = 2000
+
         return cls(
             action=data.get("action", "WAIT"),
             confidence=float(data.get("confidence", 0.0)),
@@ -99,10 +127,17 @@ class ActionStep:
             keys=data.get("keys"),
             scroll=data.get("scroll"),
             wait_seconds=float(data.get("wait_seconds", 0.0)),
+            repeat=repeat,
+            hold_ms=hold_ms,
         )
 
     def summary(self) -> str:
         target_desc = f" @ ({self.target.x:.2f},{self.target.y:.2f})" if self.target else ""
+        if self.action == "KEYPRESS" and self.keys:
+            keys = "+".join(self.keys)
+            rep = f"x{self.repeat}" if self.repeat and self.repeat > 1 else ""
+            hold = f" hold={self.hold_ms}ms" if self.hold_ms else ""
+            return f"{self.action}({keys}{rep}{hold}) ({self.confidence:.2f})"
         return f"{self.action}{target_desc} ({self.confidence:.2f})"
 
 

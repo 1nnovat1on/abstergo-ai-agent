@@ -42,8 +42,8 @@ class ActionExecutor:
             self.adapter.click(*target_coords, clicks=2)
         elif step.action == "DRAG" and step.target:
             end = target_coords or (0, 0)
-            start = self.adapter.screen_size()
-            self.adapter.drag((start[0] // 2, start[1] // 2), end)
+            screen_w, screen_h = self.adapter.screen_size()
+            self.adapter.drag((screen_w // 2, screen_h // 2), end)
         elif step.action == "SCROLL":
             dx = int(step.scroll.get("dx", 0)) if step.scroll else 0
             dy = int(step.scroll.get("dy", 0)) if step.scroll else 0
@@ -51,7 +51,7 @@ class ActionExecutor:
         elif step.action == "TYPE" and step.text:
             self.adapter.type_text(step.text)
         elif step.action == "KEYPRESS" and step.keys:
-            self.adapter.keypress(step.keys)
+            self.adapter.keypress(step.keys, repeat=step.repeat, hold_ms=step.hold_ms)
         elif step.action == "WAIT":
             time.sleep(step.wait_seconds)
         elif step.action == "FOCUS_WINDOW":

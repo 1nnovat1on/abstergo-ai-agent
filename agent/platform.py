@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import io
+import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -57,8 +58,57 @@ class PlatformAdapter:
     def type_text(self, text: str) -> None:
         raise NotImplementedError
 
-    def keypress(self, keys: Optional[list[str]]) -> None:
+    # Updated signature: repeat + hold_ms are optional and default-safe.
+    def keypress(self, keys: Optional[list[str]], repeat: int = 1, hold_ms: int = 0) -> None:
         raise NotImplementedError
+
+
+def _normalize_key_name(key: str) -> str:
+    """
+    Normalize common key synonyms to what pyautogui expects.
+    This stays intentionally small to avoid breaking existing behavior.
+    """
+    k = (key or "").strip()
+    if not k:
+        return k
+    k_upper = k.upper()
+
+    mapping = {
+        "CTRL": "ctrl",
+        "CONTROL": "ctrl",
+        "ALT": "alt",
+        "SHIFT": "shift",
+        "ENTER": "enter",
+        "RETURN": "enter",
+        "ESC": "esc",
+        "ESCAPE": "esc",
+        "TAB": "tab",
+        "WIN": "win",
+        "WINDOWS": "win",
+        "CMD": "command",   # mac
+        "COMMAND": "command",
+        "META": "command",  # mac-ish synonym
+        "BACKSPACE": "backspace",
+        "DEL": "delete",
+        "DELETE": "delete",
+        "SPACE": "space",
+        "UP": "up",
+        "DOWN": "down",
+        "LEFT": "left",
+        "RIGHT": "right",
+        "HOME": "home",
+        "END": "end",
+        "PGUP": "pageup",
+        "PAGEUP": "pageup",
+        "PGDN": "pagedown",
+        "PAGEDOWN": "pagedown",
+    }
+
+    # Letters/numbers should be lower-case for pyautogui, e.g. "L" -> "l"
+    if len(k) == 1:
+        return k.lower()
+
+    return mapping.get(k_upper, k.lower())
 
 
 class PyAutoGUIAdapter(PlatformAdapter):
@@ -99,11 +149,49 @@ class PyAutoGUIAdapter(PlatformAdapter):
     def type_text(self, text: str) -> None:
         pag.typewrite(text, interval=0.02)
 
-    def keypress(self, keys: Optional[list[str]]) -> None:
+    def keypress(self, keys: Optional[list[str]], repeat: int = 1, hold_ms: int = 0) -> None:
+        """
+        Supports combos like ["ctrl","l"] using pag.hotkey.
+        - repeat: press the combo N times
+        - hold_ms: optional small hold before releasing modifiers (best-effort)
+        """
         if not keys:
             return
-        for key in keys:
-            pag.press(key)
+
+        # Clamp repeat defensively
+        if repeat < 1:
+            repeat = 1
+        if repeat > 10:
+            repeat = 10
+        if hold_ms < 0:
+            hold_ms = 0
+        if hold_ms > 2000:
+            hold_ms = 2000
+
+        norm = [_normalize_key_name(k) for k in keys if k and str(k).strip()]
+        norm = [k for k in norm if k]
+        if not norm:
+            return
+
+        for _ in range(repeat):
+            if len(norm) == 1:
+                pag.press(norm[0])
+            else:
+                # If hold_ms requested, do a manual keyDown/keyUp sequence.
+                if hold_ms > 0:
+                    # press down all but last key as modifiers, then press last, then release
+                    mods = norm[:-1]
+                    last = norm[-1]
+                    for m in mods:
+                        pag.keyDown(m)
+                    pag.press(last)
+                    time.sleep(hold_ms / 1000.0)
+                    for m in reversed(mods):
+                        pag.keyUp(m)
+                else:
+                    pag.hotkey(*norm)
+
+            time.sleep(0.03)  # tiny spacing to avoid OS dropping events
 
 
 class NullAdapter(PlatformAdapter):
@@ -132,7 +220,7 @@ class NullAdapter(PlatformAdapter):
     def type_text(self, text: str) -> None:
         return None
 
-    def keypress(self, keys: Optional[list[str]]) -> None:
+    def keypress(self, keys: Optional[list[str]], repeat: int = 1, hold_ms: int = 0) -> None:
         return None
 
 
