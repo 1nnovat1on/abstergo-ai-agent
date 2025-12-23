@@ -67,7 +67,10 @@ class GeminiPlanner:
 
         try:
             genai.configure(api_key=api_key)
-            generation_config = self._build_generation_config()
+            generation_config = GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=ACTION_SCHEMA,
+            )
             self.client = genai.GenerativeModel(
                 self.model_name,
                 generation_config=generation_config,
@@ -137,43 +140,6 @@ class GeminiPlanner:
                     return part_text
 
         return ""
-
-    def _build_generation_config(self) -> Any:
-        """Return a generation config requesting JSON; tolerate older SDKs."""
-
-        supported_fields = self._generation_config_fields()
-        config_dict: Dict[str, Any] = {}
-
-        if "response_schema" in supported_fields:
-            config_dict["response_schema"] = ACTION_SCHEMA
-        if "response_mime_type" in supported_fields:
-            config_dict["response_mime_type"] = "application/json"
-
-        if not GenerationConfig:
-            return config_dict
-
-        try:
-            return GenerationConfig(**config_dict)
-        except TypeError:
-            logger.warning("GenerationConfig did not accept JSON schema fields; falling back to dict.")
-            return config_dict
-
-    def _generation_config_fields(self) -> set[str]:
-        """Return supported GenerationConfig fields for the installed SDK."""
-
-        if not GenerationConfig:
-            return set()
-
-        annotations = getattr(GenerationConfig, "__annotations__", {}) or {}
-        if annotations:
-            return set(annotations.keys())
-
-        import inspect
-
-        try:
-            return set(inspect.signature(GenerationConfig).parameters.keys())
-        except (TypeError, ValueError):
-            return set()
 
     def _safe_json(self, text: str) -> Dict[str, Any]:
         import json
