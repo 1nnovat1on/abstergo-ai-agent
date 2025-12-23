@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import logging
 from typing import Any, Dict, Optional
 
 from .actions import ACTION_SCHEMA, DEFAULT_REFLECTION
 from .state import AgentState
 
+
+logger = logging.getLogger(__name__)
 
 genai_spec = importlib.util.find_spec("google.generativeai")
 genai_available = genai_spec and genai_spec.loader is not None
@@ -39,19 +42,37 @@ Action schema (JSON Schema): {schema}
 
 
 class GeminiPlanner:
-    def __init__(self, model: str = "gemini-1.5-flash", api_key_env: str = "GEMINI_API_KEY") -> None:
-        self.model_name = model
+    def __init__(
+        self,
+        model: str = "gemini-2.5-flash",
+        api_key_env: str = "GEMINI_API_KEY",
+        model_env: str = "GEMINI_MODEL",
+    ) -> None:
+        self.model_name = os.getenv(model_env, model)
         self.api_key_env = api_key_env
-        self.client = None
-        if genai:
-            api_key = os.getenv(api_key_env)
-            if api_key:
-                genai.configure(api_key=api_key)
-                self.client = genai.GenerativeModel(model)
+        self.client: Optional[Any] = None
+        self.unavailable_reason: Optional[str] = None
+
+        if not genai:
+            self.unavailable_reason = "google.generativeai is not installed."
+            return
+
+        api_key = os.getenv(api_key_env)
+        if not api_key:
+            self.unavailable_reason = f"{api_key_env} is not set."
+            return
+
+        try:
+            genai.configure(api_key=api_key)
+            self.client = genai.GenerativeModel(self.model_name)
+        except Exception as exc:  # noqa: BLE001
+            self.unavailable_reason = f"Gemini client init failed: {exc}"
+            logger.exception(self.unavailable_reason)
 
     def plan(self, state: AgentState, screenshot_b64: Optional[str]) -> Dict[str, Any]:
         if not self.client:
-            return DEFAULT_REFLECTION
+            logger.warning("Falling back to default reflection: %s", self.unavailable_reason)
+            return self._fallback(self.unavailable_reason or "Gemini client unavailable.")
 
         prompt = PROMPT_TEMPLATE.format(
             mode=state.current_mode,
@@ -75,14 +96,25 @@ class GeminiPlanner:
                 "data": screenshot_b64,
             })
 
-        response = self.client.generate_content(parts, request_options={"timeout": 120})
-        text = response.text or ""
-        return self._safe_json(text)
+        try:
+            response = self.client.generate_content(parts, request_options={"timeout": 120})
+            text = response.text or ""
+            return self._safe_json(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Gemini planning failed; returning fallback WAIT action.")
+            return self._fallback(f"Gemini planning failed: {exc}")
 
     def _safe_json(self, text: str) -> Dict[str, Any]:
         import json
 
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
-            return DEFAULT_REFLECTION
+        except json.JSONDecodeError as exc:
+            logger.warning("Gemini response was not valid JSON: %s", exc)
+            return self._fallback("Planner returned non-JSON response.")
+
+    def _fallback(self, reason: str) -> Dict[str, Any]:
+        action = dict(DEFAULT_REFLECTION["actions"][0])
+        if reason:
+            action["rationale"] = reason
+        return {"actions": [action]}
