@@ -50,6 +50,8 @@ class AgentOrchestrator:
             self.running = True
             self.thread = threading.Thread(target=self._run_loop, daemon=True)
             self.thread.start()
+            print("AGENT THREAD STARTED", flush=True)
+
 
     def stop(self) -> None:
         with self.lock:
@@ -130,6 +132,7 @@ class AgentOrchestrator:
                     else:
                         sleep_after_loop = 0.2
                 else:
+                    print("CALLING PLANNER", flush=True)
                     plan_response = self.planner.plan(
                         self.state,
                         screenshot_b64,

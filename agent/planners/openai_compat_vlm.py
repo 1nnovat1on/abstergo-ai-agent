@@ -80,6 +80,9 @@ class LocalVLMPlanner:
         )
 
         try:
+            logger.warning("POSTING TO OLLAMA: %s", self._chat_url())
+            logger.warning("MODEL=%s has_image=%s b64_len=%s",
+               self.model, bool(screenshot_b64), len(screenshot_b64 or ""))
             response = requests.post(
                 self._chat_url(),
                 headers=headers,
@@ -90,6 +93,8 @@ class LocalVLMPlanner:
             content = response.json()
             text = self._extract_text(content)
             self.next_allowed_time = 0.0
+            logger.warning("OLLAMA RESP status=%s", response.status_code)
+
             return self._safe_json(text)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Local VLM planning failed; returning fallback WAIT action.")
@@ -146,28 +151,20 @@ class LocalVLMPlanner:
         if screenshot_b64:
             clean_b64 = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
 
-        messages: List[Dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": prompt,
-            }
-        ]
+        messages: List[Dict[str, Any]] = []
 
         if clean_b64:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "Analyze the screenshot and propose actions following the schema.",
-                    "images": [clean_b64],
-                }
-            )
+            messages.append({
+                "role": "user",
+                "content": prompt + "\n\nAnalyze the screenshot and propose actions following the schema.",
+                "images": [clean_b64],
+            })
         else:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "No screenshot available. Provide actions using the schema.",
-                }
-            )
+            messages.append({
+                "role": "user",
+                "content": prompt + "\n\nNo screenshot available. Provide actions using the schema.",
+            })
+
 
         # `format: json` asks Ollama to adhere to JSON output; combined with the system prompt this
         # helps ensure the planner returns a parsable action list.
