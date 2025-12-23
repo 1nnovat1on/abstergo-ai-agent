@@ -1,3 +1,4 @@
+# gemini_client.py
 from __future__ import annotations
 
 import importlib.util
@@ -24,11 +25,20 @@ else:
 
 
 PROMPT_TEMPLATE = """
-You are an autonomous desktop agent. You control mouse and keyboard. Respond ONLY with JSON following the provided schema.
-- Use normalized coordinates (0..1) relative to the latest screenshot.
-- Keep actions concise and deterministic.
-- Avoid requesting new screenshots unless necessary.
-- Summarize inner monologue in rationale fields.
+You are an autonomous desktop agent. You control mouse and keyboard.
+Respond ONLY with a single JSON object that matches the provided schema. No markdown. No code fences.
+
+Grounding rules:
+- All coordinates MUST be normalized (0..1) relative to the latest screenshot provided in this request.
+- If no screenshot is provided, do NOT guess coordinates; prefer WAIT or non-visual actions (hotkeys).
+- When clicking UI elements, choose a safe click point: near the center of the intended element, not near edges.
+- If you are not confident you can target the correct element (confidence < 0.55), return WAIT and explain what you need to see next.
+
+Speed & reliability:
+- Prefer keyboard shortcuts/hotkeys when they are likely to work (e.g., Ctrl+L, Ctrl+F, Ctrl+S, Ctrl+A/C/V, Alt+Tab, Enter, Esc, Tab).
+- Use mouse actions when hotkeys are not available or require visual targeting.
+
+Keep actions concise and deterministic. Return at most 5 actions.
 
 Agent mode: {mode}
 Current goal: {goal}
@@ -40,6 +50,7 @@ Emotion vector (10 floats 0..1): {emotions}
 Active window: {active_start} -> {active_stop}
 Agent status: {status}
 Time since last action (s): {tsla}
+Screenshot provided this request: {has_screenshot}
 
 Action schema (JSON Schema): {schema}
 """
@@ -95,15 +106,18 @@ class GeminiPlanner:
             active_stop=state.active_window_stop or "<unset>",
             status=state.agent_status,
             tsla=state.time_since_last_action(),
+            has_screenshot=bool(screenshot_b64),
             schema=ACTION_SCHEMA,
         )
 
         parts: list[Any] = [prompt]
         if screenshot_b64:
-            parts.append({
-                "mime_type": "image/png",
-                "data": screenshot_b64,
-            })
+            parts.append(
+                {
+                    "mime_type": "image/png",
+                    "data": screenshot_b64,
+                }
+            )
 
         try:
             response = self.client.generate_content(parts, request_options={"timeout": 120})
@@ -119,7 +133,6 @@ class GeminiPlanner:
         We prefer the `.text` helper, but fall back to the first candidate part
         to be resilient to SDK changes or empty helper fields.
         """
-
         if not response:
             return ""
 
@@ -143,20 +156,32 @@ class GeminiPlanner:
     def _safe_json(self, text: str) -> Dict[str, Any]:
         import json
 
-        cleaned = text.strip()
+        cleaned = (text or "").strip()
         if not cleaned:
             logger.warning("Gemini response was empty; returning WAIT fallback.")
             return self._fallback("Planner returned empty response.")
 
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\n", "", cleaned)
-            cleaned = re.sub(r"```\s*$", "", cleaned)
+            cleaned = re.sub(r"```\s*$", "", cleaned).strip()
 
+        # Try direct parse first
         try:
             return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            logger.warning("Gemini response was not valid JSON: %s", exc)
-            return self._fallback("Planner returned non-JSON response.")
+        except json.JSONDecodeError:
+            pass
+
+        # Minimal salvage: extract the first JSON object if the model added preamble text
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if match:
+            candidate = match.group(0).strip()
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                logger.warning("Extracted JSON still invalid: %s", exc)
+
+        logger.warning("Gemini response was not valid JSON; returning WAIT fallback.")
+        return self._fallback("Planner returned non-JSON response.")
 
     def _fallback(self, reason: str) -> Dict[str, Any]:
         action = dict(DEFAULT_REFLECTION["actions"][0])
@@ -167,18 +192,20 @@ class GeminiPlanner:
     def _build_generation_config(self) -> Optional[Any]:
         """Build a GenerationConfig that is compatible with installed SDK.
 
-        Older google-generativeai versions do not support structured output
-        fields like ``response_mime_type``/``response_schema``. To keep the
-        planner working across versions, we only pass arguments that are
-        present in the detected signature.
+        Older google-generativeai versions do not support structured output fields like
+        response_mime_type/response_schema. We only pass arguments present in the
+        detected signature to remain compatible across versions.
         """
-
         if not GenerationConfig:
             return None
 
         desired = {
             "response_mime_type": "application/json",
             "response_schema": ACTION_SCHEMA,
+            # Mild determinism (only used if supported by installed SDK)
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_output_tokens": 1024,
         }
 
         try:
@@ -200,5 +227,5 @@ class GeminiPlanner:
         try:
             return GenerationConfig(**supported_kwargs)
         except TypeError:
-            logger.warning("GenerationConfig rejected structured output args; continuing without.")
+            logger.warning("GenerationConfig rejected args; continuing without.")
             return None
