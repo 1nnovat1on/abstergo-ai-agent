@@ -11,6 +11,11 @@ import requests
 from agent.actions import ACTION_SCHEMA, DEFAULT_REFLECTION
 from agent.state import AgentState
 
+import logging
+logger = logging.getLogger(__name__)
+logger.warning("LOADED PLANNER FILE: %s", __file__)
+
+
 logger = logging.getLogger(__name__)
 
 
