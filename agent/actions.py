@@ -141,10 +141,13 @@ class ActionStep:
         return f"{self.action}{target_desc} ({self.confidence:.2f})"
 
 
-def parse_actions(response: Dict[str, Any]) -> List[ActionStep]:
+def parse_actions(response: Dict[str, Any], min_confidence: float = 0.0) -> List[ActionStep]:
     actions: List[ActionStep] = []
     for raw in response.get("actions", []):
-        actions.append(ActionStep.from_dict(raw))
+        step = ActionStep.from_dict(raw)
+        if step.action != "WAIT" and step.confidence < min_confidence:
+            continue
+        actions.append(step)
     return actions
 
 
