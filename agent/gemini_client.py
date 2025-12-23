@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import logging
 import os
 import re
@@ -67,14 +68,12 @@ class GeminiPlanner:
 
         try:
             genai.configure(api_key=api_key)
-            generation_config = GenerationConfig(
-                response_mime_type="application/json",
-                response_schema=ACTION_SCHEMA,
-            )
-            self.client = genai.GenerativeModel(
-                self.model_name,
-                generation_config=generation_config,
-            )
+            generation_config = self._build_generation_config()
+            model_kwargs: Dict[str, Any] = {}
+            if generation_config is not None:
+                model_kwargs["generation_config"] = generation_config
+
+            self.client = genai.GenerativeModel(self.model_name, **model_kwargs)
         except Exception as exc:  # noqa: BLE001
             self.unavailable_reason = f"Gemini client init failed: {exc}"
             logger.exception(self.unavailable_reason)
@@ -164,3 +163,42 @@ class GeminiPlanner:
         if reason:
             action["rationale"] = reason
         return {"actions": [action]}
+
+    def _build_generation_config(self) -> Optional[Any]:
+        """Build a GenerationConfig that is compatible with installed SDK.
+
+        Older google-generativeai versions do not support structured output
+        fields like ``response_mime_type``/``response_schema``. To keep the
+        planner working across versions, we only pass arguments that are
+        present in the detected signature.
+        """
+
+        if not GenerationConfig:
+            return None
+
+        desired = {
+            "response_mime_type": "application/json",
+            "response_schema": ACTION_SCHEMA,
+        }
+
+        try:
+            signature = inspect.signature(GenerationConfig)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            logger.debug("Could not inspect GenerationConfig signature; using defaults.")
+            signature = None
+
+        supported_kwargs: Dict[str, Any] = {}
+        for name, value in desired.items():
+            if signature and name not in signature.parameters:
+                logger.debug("GenerationConfig missing %s; skipping.", name)
+                continue
+            supported_kwargs[name] = value
+
+        if not supported_kwargs:
+            return None
+
+        try:
+            return GenerationConfig(**supported_kwargs)
+        except TypeError:
+            logger.warning("GenerationConfig rejected structured output args; continuing without.")
+            return None
