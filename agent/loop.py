@@ -11,7 +11,7 @@ import hashlib
 from .actions import ActionStep, parse_actions
 from .controller import ActionExecutor
 from .planners.factory import create_planner
-from .platform import PlatformAdapter, Screenshot, default_adapter
+from .platform_agent import PlatformAdapter, Screenshot, default_adapter
 from .state import StateManager, utc_now
 from .storage import log_action, snapshot_state
 
