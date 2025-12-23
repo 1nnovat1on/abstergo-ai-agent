@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -20,6 +21,7 @@ You are an autonomous desktop agent. You control mouse and keyboard. Respond ONL
 - Keep actions concise and deterministic.
 - Avoid requesting new screenshots unless necessary.
 - Summarize inner monologue in rationale fields.
+- Execute provided actions in order before replanning, and verify the outcome on the next observation before changing course.
 
 Scene understanding (from vision model):
 {scene}
@@ -34,6 +36,7 @@ Emotion vector (10 floats 0..1): {emotions}
 Active window: {active_start} -> {active_stop}
 Agent status: {status}
 Time since last action (s): {tsla}
+Screenshot meta (width x height @ dpi): {screenshot_meta}
 
 Action schema (JSON Schema): {schema}
 """
@@ -56,9 +59,22 @@ class HybridPlanner:
         self.text_base_url = os.getenv(text_base_url_env, default_text_url).rstrip("/")
         self.text_model = os.getenv(text_model_env, default_text_model)
         self.text_api_key = os.getenv(text_api_key_env, "")
+        self.next_allowed_time: float = 0.0
+        self.next_vision_allowed_time: float = 0.0
+        self.last_scene_key: Optional[str] = None
+        self.last_scene: Optional[Dict[str, Any]] = None
 
-    def plan(self, state: AgentState, screenshot_b64: Optional[str]) -> Dict[str, Any]:
-        vision_scene = self._run_florence(screenshot_b64)
+    def plan(self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        now = time.time()
+        if self.next_allowed_time and now < self.next_allowed_time:
+            wait_for = max(0.0, self.next_allowed_time - now)
+            return self._fallback(f"Rate limited; retry after {wait_for:.1f}s.")
+
+        scene_key = None
+        if metadata:
+            scene_key = metadata.get("screenshot_key")
+        vision_scene = self._run_florence(screenshot_b64, scene_key)
+        screenshot_meta = metadata.get("screenshot_meta") if metadata else None
         prompt = PROMPT_TEMPLATE.format(
             scene=json.dumps(vision_scene, ensure_ascii=False, separators=(",", ":")),
             mode=state.current_mode,
@@ -72,6 +88,7 @@ class HybridPlanner:
             active_stop=state.active_window_stop or "<unset>",
             status=state.agent_status,
             tsla=state.time_since_last_action(),
+            screenshot_meta=screenshot_meta or "<unknown>",
             schema=ACTION_SCHEMA,
         )
 
@@ -93,14 +110,23 @@ class HybridPlanner:
             response.raise_for_status()
             content = response.json()
             text = self._extract_text(content)
+            self.next_allowed_time = 0.0
             return self._safe_json(text)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Hybrid planner text LLM failed; returning fallback WAIT action.")
+            self.next_allowed_time = time.time() + self._backoff_seconds(exc)
             return self._fallback(f"Hybrid text planning failed: {exc}")
 
-    def _run_florence(self, screenshot_b64: Optional[str]) -> Dict[str, Any]:
+    def _run_florence(self, screenshot_b64: Optional[str], scene_key: Optional[str]) -> Dict[str, Any]:
+        now = time.time()
         if not screenshot_b64:
             return {"scene": "No screenshot provided"}
+
+        if scene_key and self.last_scene_key == scene_key and self.last_scene is not None:
+            return self.last_scene
+
+        if self.next_vision_allowed_time and now < self.next_vision_allowed_time:
+            return {"scene": f"Vision temporarily paused (rate limit {self.next_vision_allowed_time - now:.1f}s remaining)"}
 
         payload: Dict[str, Any] = {
             "inputs": [],
@@ -123,9 +149,13 @@ class HybridPlanner:
                 timeout=120,
             )
             response.raise_for_status()
-            return response.json()
+            self.next_vision_allowed_time = 0.0
+            self.last_scene_key = scene_key
+            self.last_scene = response.json()
+            return self.last_scene
         except Exception as exc:  # noqa: BLE001
             logger.exception("Florence vision extraction failed; returning minimal scene.")
+            self.next_vision_allowed_time = time.time() + self._backoff_seconds(exc, vision=True)
             return {"scene": f"Vision extraction failed: {exc}"}
 
     def _extract_text(self, content: Dict[str, Any]) -> str:
@@ -158,3 +188,13 @@ class HybridPlanner:
         if reason:
             action["rationale"] = reason
         return {"actions": [action]}
+
+    def _backoff_seconds(self, exc: Exception, vision: bool = False) -> float:
+        if isinstance(exc, requests.HTTPError) and exc.response is not None:
+            status = exc.response.status_code
+            if status == 429 or status >= 500:
+                return 10.0
+        message = str(exc).lower()
+        if "429" in message or "rate" in message or "limit" in message:
+            return 10.0 if vision else 8.0
+        return 5.0

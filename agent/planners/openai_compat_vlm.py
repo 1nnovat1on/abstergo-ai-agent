@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -19,6 +20,7 @@ You are an autonomous desktop agent. You control mouse and keyboard. Respond ONL
 - Keep actions concise and deterministic.
 - Avoid requesting new screenshots unless necessary.
 - Summarize inner monologue in rationale fields.
+- Execute provided actions in order before replanning, and verify the outcome on the next observation before changing course.
 
 Agent mode: {mode}
 Current goal: {goal}
@@ -30,6 +32,7 @@ Emotion vector (10 floats 0..1): {emotions}
 Active window: {active_start} -> {active_stop}
 Agent status: {status}
 Time since last action (s): {tsla}
+Screenshot meta (width x height @ dpi): {screenshot_meta}
 
 Action schema (JSON Schema): {schema}
 """
@@ -47,9 +50,15 @@ class LocalVLMPlanner:
         self.base_url = os.getenv(base_url_env, default_base_url).rstrip("/")
         self.model = os.getenv(model_env, default_model)
         self.api_key = os.getenv(api_key_env, "")
+        self.next_allowed_time: float = 0.0
 
-    def plan(self, state: AgentState, screenshot_b64: Optional[str]) -> Dict[str, Any]:
-        payload = self._build_payload(state, screenshot_b64)
+    def plan(self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        now = time.time()
+        if self.next_allowed_time and now < self.next_allowed_time:
+            wait_for = max(0.0, self.next_allowed_time - now)
+            return self._fallback(f"Rate limited; retry after {wait_for:.1f}s.")
+
+        payload = self._build_payload(state, screenshot_b64, metadata)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -59,12 +68,20 @@ class LocalVLMPlanner:
             response.raise_for_status()
             content = response.json()
             text = self._extract_text(content)
+            self.next_allowed_time = 0.0
             return self._safe_json(text)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Local VLM planning failed; returning fallback WAIT action.")
+            self.next_allowed_time = time.time() + self._backoff_seconds(exc)
             return self._fallback(f"Local VLM planning failed: {exc}")
 
-    def _build_payload(self, state: AgentState, screenshot_b64: Optional[str]) -> Dict[str, Any]:
+    def _build_payload(
+        self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        screenshot_meta = None
+        if metadata:
+            screenshot_meta = metadata.get("screenshot_meta")
+
         prompt = PROMPT_TEMPLATE.format(
             mode=state.current_mode,
             goal=state.current_goal or "<none>",
@@ -77,6 +94,7 @@ class LocalVLMPlanner:
             active_stop=state.active_window_stop or "<unset>",
             status=state.agent_status,
             tsla=state.time_since_last_action(),
+            screenshot_meta=screenshot_meta or "<unknown>",
             schema=ACTION_SCHEMA,
         )
 
@@ -145,3 +163,13 @@ class LocalVLMPlanner:
         if reason:
             action["rationale"] = reason
         return {"actions": [action]}
+
+    def _backoff_seconds(self, exc: Exception) -> float:
+        if isinstance(exc, requests.HTTPError) and exc.response is not None:
+            status = exc.response.status_code
+            if status == 429 or status >= 500:
+                return 10.0
+        message = str(exc).lower()
+        if "429" in message or "rate" in message or "limit" in message:
+            return 10.0
+        return 5.0

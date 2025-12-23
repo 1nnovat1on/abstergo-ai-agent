@@ -25,6 +25,8 @@ class ActionExecutor:
         size = self.last_capture_size
 
         for step in actions:
+            if step.action != "WAIT" and step.confidence < 0.55:
+                continue
             summary = self._execute_step(step, size)
             executed.append(summary)
         return executed

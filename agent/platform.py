@@ -29,6 +29,7 @@ class Screenshot:
     image: Image.Image
     width: int
     height: int
+    dpi: tuple[float, float] = (96.0, 96.0)
 
     def to_base64(self) -> str:
         buffer = io.BytesIO()
@@ -122,9 +123,11 @@ class PyAutoGUIAdapter(PlatformAdapter):
                 monitor = sct.monitors[0]
                 shot = sct.grab(monitor)
                 img = Image.frombytes("RGB", shot.size, shot.rgb)
-                return Screenshot(img, shot.width, shot.height)
+                dpi = img.info.get("dpi", (96.0, 96.0))
+                return Screenshot(img, shot.width, shot.height, dpi=dpi)
         shot = pag.screenshot()
-        return Screenshot(shot, shot.width, shot.height)
+        dpi = shot.info.get("dpi", (96.0, 96.0))
+        return Screenshot(shot, shot.width, shot.height, dpi=dpi)
 
     def screen_size(self) -> Tuple[int, int]:
         size = pag.size()
@@ -200,7 +203,7 @@ class NullAdapter(PlatformAdapter):
 
     def capture(self) -> Screenshot:
         image = Image.new("RGB", self._size, color=(24, 24, 24))
-        return Screenshot(image, self._size[0], self._size[1])
+        return Screenshot(image, self._size[0], self._size[1], dpi=(96.0, 96.0))
 
     def screen_size(self) -> Tuple[int, int]:
         return self._size

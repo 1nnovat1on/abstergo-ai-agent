@@ -6,6 +6,7 @@ import inspect
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, Optional
 
 from agent.actions import ACTION_SCHEMA, DEFAULT_REFLECTION
@@ -33,12 +34,13 @@ Grounding rules:
 - If no screenshot is provided, do NOT guess coordinates; prefer WAIT or non-visual actions (hotkeys).
 - When clicking UI elements, choose a safe click point: near the center of the intended element, not near edges.
 - If you are not confident you can target the correct element (confidence < 0.55), return WAIT and explain what you need to see next.
+- If a sequence of actions is provided, execute them in order before replanning. Verify the outcome using the next observation before changing course.
 
 Speed & reliability:
 - Prefer keyboard shortcuts/hotkeys when they are likely to work (e.g., Ctrl+L, Ctrl+F, Ctrl+S, Ctrl+A/C/V, Alt+Tab, Enter, Esc, Tab).
 - Use mouse actions when hotkeys are not available or require visual targeting.
 
-Keep actions concise and deterministic. Return at most 5 actions.
+Keep actions concise and deterministic. Return actions in execution order.
 
 Agent mode: {mode}
 Current goal: {goal}
@@ -51,6 +53,7 @@ Active window: {active_start} -> {active_stop}
 Agent status: {status}
 Time since last action (s): {tsla}
 Screenshot provided this request: {has_screenshot}
+Screenshot meta (width x height @ dpi): {screenshot_meta}
 
 Action schema (JSON Schema): {schema}
 """
@@ -67,6 +70,7 @@ class GeminiPlanner:
         self.api_key_env = api_key_env
         self.client: Optional[Any] = None
         self.unavailable_reason: Optional[str] = None
+        self.next_allowed_time: float = 0.0
 
         if not genai:
             self.unavailable_reason = "google.generativeai is not installed."
@@ -89,11 +93,17 @@ class GeminiPlanner:
             self.unavailable_reason = f"Gemini client init failed: {exc}"
             logger.exception(self.unavailable_reason)
 
-    def plan(self, state: AgentState, screenshot_b64: Optional[str]) -> Dict[str, Any]:
+    def plan(self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self.client:
             logger.warning("Falling back to default reflection: %s", self.unavailable_reason)
             return self._fallback(self.unavailable_reason or "Gemini client unavailable.")
 
+        now = time.time()
+        if self.next_allowed_time and now < self.next_allowed_time:
+            wait_for = max(0.0, self.next_allowed_time - now)
+            return self._fallback(f"Rate limited; retry after {wait_for:.1f}s.")
+
+        screenshot_meta = metadata.get("screenshot_meta") if metadata else None
         prompt = PROMPT_TEMPLATE.format(
             mode=state.current_mode,
             goal=state.current_goal or "<none>",
@@ -107,6 +117,7 @@ class GeminiPlanner:
             status=state.agent_status,
             tsla=state.time_since_last_action(),
             has_screenshot=bool(screenshot_b64),
+            screenshot_meta=screenshot_meta or "<unknown>",
             schema=ACTION_SCHEMA,
         )
 
@@ -122,9 +133,11 @@ class GeminiPlanner:
         try:
             response = self.client.generate_content(parts, request_options={"timeout": 120})
             text = self._extract_text(response)
+            self.next_allowed_time = 0.0
             return self._safe_json(text)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Gemini planning failed; returning fallback WAIT action.")
+            self.next_allowed_time = time.time() + self._backoff_seconds(exc)
             return self._fallback(f"Gemini planning failed: {exc}")
 
     def _extract_text(self, response: Any) -> str:
@@ -228,3 +241,9 @@ class GeminiPlanner:
         except TypeError:
             logger.warning("GenerationConfig rejected structured output args; continuing without.")
             return None
+
+    def _backoff_seconds(self, exc: Exception) -> float:
+        message = str(exc).lower()
+        if "429" in message or "rate" in message or "exhausted" in message:
+            return 10.0
+        return 5.0

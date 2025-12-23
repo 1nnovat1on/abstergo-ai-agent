@@ -6,5 +6,5 @@ from agent.state import AgentState
 
 
 class Planner(Protocol):
-    def plan(self, state: AgentState, screenshot_b64: Optional[str]) -> Dict[str, Any]:
+    def plan(self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ...
