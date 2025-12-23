@@ -47,6 +47,7 @@ class LocalVLMPlanner:
         default_base_url: str = "http://127.0.0.1:11434",
         default_model: str = "llava:7b",
     ) -> None:
+        # Ollama runs a local HTTP server; we only need the host/port, not an OpenAI-style path.
         self.base_url = os.getenv(base_url_env, default_base_url).rstrip("/")
         self.model = os.getenv(model_env, default_model)
         self.api_key = os.getenv(api_key_env, "")
@@ -67,17 +68,15 @@ class LocalVLMPlanner:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # ✅ build payload (this was missing)
         payload = self._build_payload(
             state=state,
             screenshot_b64=screenshot_b64,
             metadata=metadata,
-            style="ollama",
         )
 
         try:
             response = requests.post(
-                f"{self.base_url}/api/chat",
+                self._chat_url(),
                 headers=headers,
                 json=payload,
                 timeout=120,
@@ -92,27 +91,31 @@ class LocalVLMPlanner:
             self.next_allowed_time = time.time() + self._backoff_seconds(exc)
             return self._fallback(f"Local VLM planning failed: {exc}")
 
-    def _candidate_paths(self) -> List[tuple[str, str]]:
-        """Return possible chat completion paths for OpenAI-compatible or Ollama endpoints."""
+    def _chat_url(self) -> str:
+        """Return the Ollama chat endpoint, normalizing away OpenAI-style suffixes."""
 
-        base_no_version = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
-        if self.base_url.endswith("/v1"):
-            openai_path = "/chat/completions"
-        else:
-            openai_path = "/v1/chat/completions"
+        # Strip any trailing path segments that mimic OpenAI (e.g., /v1 or /v1/chat/completions)
+        trimmed = self.base_url
+        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+            if trimmed.endswith(suffix):
+                trimmed = trimmed[: -len(suffix)]
+                break
 
-        # Ollama's native chat endpoint (without OpenAI compatibility) lives under /api/chat.
-        return [
-            (self.base_url, openai_path),
-            (base_no_version, "/api/chat"),
-        ]
+        trimmed = trimmed.rstrip("/")
+
+        # Respect users who already provide /api or /api/chat
+        if trimmed.endswith("/api/chat"):
+            return trimmed
+        if trimmed.endswith("/api"):
+            return f"{trimmed}/chat"
+
+        return f"{trimmed}/api/chat"
 
     def _build_payload(
         self,
         state: AgentState,
         screenshot_b64: Optional[str],
         metadata: Optional[Dict[str, Any]] = None,
-        style: str = "ollama",
     ) -> Dict[str, Any]:
         screenshot_meta = None
         if metadata:
@@ -134,58 +137,23 @@ class LocalVLMPlanner:
             schema=ACTION_SCHEMA,
         )
 
-        if style == "ollama":
-            clean_b64 = None
-            if screenshot_b64:
-                clean_b64 = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
-
-            messages: List[Dict[str, Any]] = [
-                {
-                    "role": "system",
-                    "content": prompt,
-                }
-            ]
-
-            if clean_b64:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": "Analyze the screenshot and propose actions following the schema.",
-                        "images": [clean_b64],
-                    }
-                )
-            else:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": "No screenshot available. Provide actions using the schema.",
-                    }
-                )
-
-            return {
-                "model": self.model,
-                "messages": messages,
-                "stream": False,
-            }
+        clean_b64 = None
+        if screenshot_b64:
+            clean_b64 = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
 
         messages: List[Dict[str, Any]] = [
             {
                 "role": "system",
                 "content": prompt,
-            },
+            }
         ]
 
-        if screenshot_b64:
+        if clean_b64:
             messages.append(
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Analyze the screenshot and propose actions following the schema."},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
-                        },
-                    ],
+                    "content": "Analyze the screenshot and propose actions following the schema.",
+                    "images": [clean_b64],
                 }
             )
         else:
@@ -196,11 +164,13 @@ class LocalVLMPlanner:
                 }
             )
 
+        # `format: json` asks Ollama to adhere to JSON output; combined with the system prompt this
+        # helps ensure the planner returns a parsable action list.
         return {
             "model": self.model,
             "messages": messages,
-            "temperature": 0,
             "stream": False,
+            "format": "json",
         }
 
     def _extract_text(self, content: Dict[str, Any]) -> str:
