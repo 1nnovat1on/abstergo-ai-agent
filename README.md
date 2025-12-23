@@ -25,9 +25,11 @@ Local autonomous UI agent powered by pluggable planners (Gemini by default). The
      - Optional: `GEMINI_MODEL` (default `gemini-2.5-flash`)
    - **Local VLM** (OpenAI-compatible, e.g., LLaVA):
      - Set `PLANNER_BACKEND=vlm`
-     - Optional: `VLM_BASE_URL` (default `http://127.0.0.1:11434/v1`)
+     - Optional: `VLM_BASE_URL` (default `http://127.0.0.1:11434`)
      - Optional: `VLM_MODEL` (e.g., `llava:7b`)
      - Optional: `VLM_API_KEY` if your endpoint requires it
+     - The planner first tries the OpenAI-compatible path (`/v1/chat/completions`) and falls back to Ollama's native `/api/chat` endpoint if the first call returns 404. Keep `VLM_BASE_URL` set to the root (e.g., `http://127.0.0.1:11434`) so either path works.
+     - When talking to Ollama's native `/api/chat`, screenshots are sent as `messages[<user>].images=[<base64>]` (no `data:` prefix) instead of OpenAI-style `image_url` parts.
    - **Hybrid** (Florence-2 for vision, text LLM for reasoning):
      - Set `PLANNER_BACKEND=hybrid`
      - Vision: `FLORENCE_BASE_URL` (default `http://127.0.0.1:8000/v1`), optional `FLORENCE_MODEL`
