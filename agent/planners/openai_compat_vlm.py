@@ -44,7 +44,7 @@ class LocalVLMPlanner:
         base_url_env: str = "VLM_BASE_URL",
         model_env: str = "VLM_MODEL",
         api_key_env: str = "VLM_API_KEY",
-        default_base_url: str = "http://127.0.0.1:11434/v1",
+        default_base_url: str = "http://127.0.0.1:11434",
         default_model: str = "llava:7b",
     ) -> None:
         self.base_url = os.getenv(base_url_env, default_base_url).rstrip("/")
@@ -63,17 +63,44 @@ class LocalVLMPlanner:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        try:
-            response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=120)
-            response.raise_for_status()
-            content = response.json()
-            text = self._extract_text(content)
-            self.next_allowed_time = 0.0
-            return self._safe_json(text)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Local VLM planning failed; returning fallback WAIT action.")
-            self.next_allowed_time = time.time() + self._backoff_seconds(exc)
-            return self._fallback(f"Local VLM planning failed: {exc}")
+        last_exc: Optional[Exception] = None
+        for base_url, path in self._candidate_paths():
+            try:
+                response = requests.post(f"{base_url}{path}", headers=headers, json=payload, timeout=120)
+                response.raise_for_status()
+                content = response.json()
+                text = self._extract_text(content)
+                self.next_allowed_time = 0.0
+                return self._safe_json(text)
+            except requests.HTTPError as exc:
+                last_exc = exc
+                status = exc.response.status_code if exc.response is not None else None
+                if status == 404:
+                    logger.info("Local VLM path %s returned 404; trying fallback path.", path)
+                    continue
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                break
+
+        logger.exception("Local VLM planning failed; returning fallback WAIT action.", exc_info=last_exc)
+        self.next_allowed_time = time.time() + self._backoff_seconds(last_exc) if last_exc else 5.0
+        return self._fallback(f"Local VLM planning failed: {last_exc}")
+
+    def _candidate_paths(self) -> List[tuple[str, str]]:
+        """Return possible chat completion paths for OpenAI-compatible or Ollama endpoints."""
+
+        base_no_version = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
+        if self.base_url.endswith("/v1"):
+            openai_path = "/chat/completions"
+        else:
+            openai_path = "/v1/chat/completions"
+
+        # Ollama's native chat endpoint (without OpenAI compatibility) lives under /api/chat.
+        return [
+            (self.base_url, openai_path),
+            (base_no_version, "/api/chat"),
+        ]
 
     def _build_payload(
         self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None
