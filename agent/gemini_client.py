@@ -67,7 +67,10 @@ class GeminiPlanner:
 
         try:
             genai.configure(api_key=api_key)
-            generation_config = self._build_generation_config()
+            generation_config = GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=ACTION_SCHEMA,
+            )
             self.client = genai.GenerativeModel(
                 self.model_name,
                 generation_config=generation_config,
@@ -137,23 +140,6 @@ class GeminiPlanner:
                     return part_text
 
         return ""
-
-    def _build_generation_config(self) -> Any:
-        """Return a generation config requesting JSON; tolerate older SDKs."""
-
-        config_dict = {
-            "response_mime_type": "application/json",
-            "response_schema": ACTION_SCHEMA,
-        }
-
-        if not GenerationConfig:
-            return config_dict
-
-        try:
-            return GenerationConfig(**config_dict)
-        except TypeError:
-            logger.warning("GenerationConfig did not accept JSON schema fields; falling back to dict.")
-            return config_dict
 
     def _safe_json(self, text: str) -> Dict[str, Any]:
         import json
