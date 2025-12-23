@@ -176,7 +176,7 @@ class LocalVLMPlanner:
                 "num_predict": 350,
                 "temperature": 0.0,
             },
-            "format": "json",
+            #"format": "json",
         }
 
     def _extract_text(self, content: Dict[str, Any]) -> str:
