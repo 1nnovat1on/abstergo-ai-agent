@@ -128,11 +128,11 @@ class GeminiPlanner:
             return self._fallback(f"Gemini planning failed: {exc}")
 
     def _extract_text(self, response: Any) -> str:
-        \"\"\"Extract the model text response from a GenerateContentResponse.
+        """Extract the model text response from a GenerateContentResponse.
 
         We prefer the `.text` helper, but fall back to the first candidate part
         to be resilient to SDK changes or empty helper fields.
-        \"\"\"
+        """
 
         if not response:
             return ""
@@ -162,9 +162,9 @@ class GeminiPlanner:
             logger.warning("Gemini response was empty; returning WAIT fallback.")
             return self._fallback("Planner returned empty response.")
 
-        if cleaned.startswith(\"'''\""):
-            cleaned = re.sub(r\"^```(?:json)?\\n\", \"\", cleaned)
-            cleaned = re.sub(r\"```\\s*$\", \"\", cleaned)
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\n", "", cleaned)
+            cleaned = re.sub(r"```\s*$", "", cleaned)
 
         # Try direct parse first
         try:
@@ -185,38 +185,38 @@ class GeminiPlanner:
         return self._fallback("Planner returned non-JSON response.")
 
     def _fallback(self, reason: str) -> Dict[str, Any]:
-        action = dict(DEFAULT_REFLECTION[\"actions\"][0])
+        action = dict(DEFAULT_REFLECTION["actions"][0])
         if reason:
-            action[\"rationale\"] = reason
-        return {\"actions\": [action]}
+            action["rationale"] = reason
+        return {"actions": [action]}
 
     def _build_generation_config(self) -> Optional[Any]:
-        \"\"\"Build a GenerationConfig that is compatible with installed SDK.
+        """Build a GenerationConfig that is compatible with installed SDK.
 
         Older google-generativeai versions do not support structured output
         fields like ``response_mime_type``/``response_schema``. To keep the
         planner working across versions, we only pass arguments that are
         present in the detected signature.
-        \"\"\"
+        """
 
         if not GenerationConfig:
             return None
 
         desired = {
-            \"response_mime_type\": \"application/json\",
-            \"response_schema\": ACTION_SCHEMA,
+            "response_mime_type": "application/json",
+            "response_schema": ACTION_SCHEMA,
         }
 
         try:
             signature = inspect.signature(GenerationConfig)
         except (TypeError, ValueError):  # pragma: no cover - defensive
-            logger.debug(\"Could not inspect GenerationConfig signature; using defaults.\")
+            logger.debug("Could not inspect GenerationConfig signature; using defaults.")
             signature = None
 
         supported_kwargs: Dict[str, Any] = {}
         for name, value in desired.items():
             if signature and name not in signature.parameters:
-                logger.debug(\"GenerationConfig missing %s; skipping.\", name)
+                logger.debug("GenerationConfig missing %s; skipping.", name)
                 continue
             supported_kwargs[name] = value
 
@@ -226,5 +226,5 @@ class GeminiPlanner:
         try:
             return GenerationConfig(**supported_kwargs)
         except TypeError:
-            logger.warning(\"GenerationConfig rejected structured output args; continuing without.\")
+            logger.warning("GenerationConfig rejected structured output args; continuing without.")
             return None
