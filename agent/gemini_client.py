@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import logging
+import os
+import re
 from typing import Any, Dict, Optional
 
 from .actions import ACTION_SCHEMA, DEFAULT_REFLECTION
@@ -15,8 +16,10 @@ genai_spec = importlib.util.find_spec("google.generativeai")
 genai_available = genai_spec and genai_spec.loader is not None
 if genai_available:
     import google.generativeai as genai
+    from google.generativeai.types import GenerationConfig
 else:
     genai = None
+    GenerationConfig = None
 
 
 PROMPT_TEMPLATE = """
@@ -64,7 +67,11 @@ class GeminiPlanner:
 
         try:
             genai.configure(api_key=api_key)
-            self.client = genai.GenerativeModel(self.model_name)
+            generation_config = self._build_generation_config()
+            self.client = genai.GenerativeModel(
+                self.model_name,
+                generation_config=generation_config,
+            )
         except Exception as exc:  # noqa: BLE001
             self.unavailable_reason = f"Gemini client init failed: {exc}"
             logger.exception(self.unavailable_reason)
@@ -98,17 +105,70 @@ class GeminiPlanner:
 
         try:
             response = self.client.generate_content(parts, request_options={"timeout": 120})
-            text = response.text or ""
+            text = self._extract_text(response)
             return self._safe_json(text)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Gemini planning failed; returning fallback WAIT action.")
             return self._fallback(f"Gemini planning failed: {exc}")
 
+    def _extract_text(self, response: Any) -> str:
+        """Extract the model text response from a GenerateContentResponse.
+
+        We prefer the `.text` helper, but fall back to the first candidate part
+        to be resilient to SDK changes or empty helper fields.
+        """
+
+        if not response:
+            return ""
+
+        text = getattr(response, "text", None)
+        if text:
+            return text
+
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) if content else None
+            if not parts:
+                continue
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    return part_text
+
+        return ""
+
+    def _build_generation_config(self) -> Any:
+        """Return a generation config requesting JSON; tolerate older SDKs."""
+
+        config_dict = {
+            "response_mime_type": "application/json",
+            "response_schema": ACTION_SCHEMA,
+        }
+
+        if not GenerationConfig:
+            return config_dict
+
+        try:
+            return GenerationConfig(**config_dict)
+        except TypeError:
+            logger.warning("GenerationConfig did not accept JSON schema fields; falling back to dict.")
+            return config_dict
+
     def _safe_json(self, text: str) -> Dict[str, Any]:
         import json
 
+        cleaned = text.strip()
+        if not cleaned:
+            logger.warning("Gemini response was empty; returning WAIT fallback.")
+            return self._fallback("Planner returned empty response.")
+
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\n", "", cleaned)
+            cleaned = re.sub(r"```\s*$", "", cleaned)
+
         try:
-            return json.loads(text)
+            return json.loads(cleaned)
         except json.JSONDecodeError as exc:
             logger.warning("Gemini response was not valid JSON: %s", exc)
             return self._fallback("Planner returned non-JSON response.")
