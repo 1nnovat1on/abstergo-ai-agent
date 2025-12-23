@@ -97,6 +97,7 @@ class AgentOrchestrator:
             return None
 
     def _run_loop(self) -> None:
+        planner_max_side = 768
         while True:
             with self.lock:
                 if not self.running:
@@ -111,12 +112,27 @@ class AgentOrchestrator:
             self.state_manager.mark_active()
             screenshot = self._maybe_capture()
             screenshot_to_use = screenshot or self.last_screenshot
-            screenshot_b64 = screenshot_to_use.to_base64() if screenshot_to_use else None
+            screenshot_b64 = None
+            scaled_meta: Optional[str] = None
+            if screenshot_to_use:
+                downscaled = screenshot_to_use.downscale(planner_max_side)
+                screenshot_b64 = downscaled.to_base64()
+                if (downscaled.width, downscaled.height) != (screenshot_to_use.width, screenshot_to_use.height):
+                    scaled_meta = (
+                        f"{screenshot_to_use.width}x{screenshot_to_use.height} -> "
+                        f"{downscaled.width}x{downscaled.height}"
+                    )
+                else:
+                    scaled_meta = f"{downscaled.width}x{downscaled.height}"
             screenshot_key = self._screenshot_key(screenshot_to_use)
             screenshot_meta = None
             if screenshot_to_use:
                 dpi = getattr(screenshot_to_use, "dpi", (96.0, 96.0))
-                screenshot_meta = f"{screenshot_to_use.width}x{screenshot_to_use.height} @ {dpi} dpi"
+                base_meta = f"{screenshot_to_use.width}x{screenshot_to_use.height} @ {dpi} dpi"
+                if scaled_meta:
+                    screenshot_meta = f"{base_meta} (scaled to {scaled_meta})"
+                else:
+                    screenshot_meta = base_meta
 
             sleep_after_loop = 0.5
 

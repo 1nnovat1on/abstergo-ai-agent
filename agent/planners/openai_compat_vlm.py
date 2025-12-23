@@ -3,29 +3,28 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
 
-from agent.actions import ACTION_SCHEMA, DEFAULT_REFLECTION
+from agent.actions import DEFAULT_REFLECTION, SUPPORTED_ACTIONS
 from agent.state import AgentState
-
-import logging
-logger = logging.getLogger(__name__)
-logger.warning("LOADED PLANNER FILE: %s", __file__)
-
 
 logger = logging.getLogger(__name__)
 
 
 PROMPT_TEMPLATE = """
-You are an autonomous desktop agent. You control mouse and keyboard. Respond ONLY with JSON following the provided schema.
-- Use normalized coordinates (0..1) relative to the latest screenshot.
-- Keep actions concise and deterministic.
-- Avoid requesting new screenshots unless necessary.
-- Summarize inner monologue in rationale fields.
-- Execute provided actions in order before replanning, and verify the outcome on the next observation before changing course.
+You are an autonomous desktop agent. Control mouse and keyboard to accomplish the goal. Respond ONLY with raw JSON.
+
+Allowed actions: {actions}
+Required keys per action: action, confidence, rationale. Optional: target (x,y,width,height normalized 0..1), text, keys, scroll, wait_seconds, expected_outcome.
+Rules:
+- Output strictly a JSON object with an "actions" array. No code fences or prose.
+- Keep plans short (1-3 steps), deterministic, and aligned to the latest screenshot (image may be downscaled; coordinates remain normalized 0..1).
+- Prefer WAIT when uncertain and avoid requesting extra screenshots.
+- Execute listed actions in order, then observe before changing course.
 
 Agent mode: {mode}
 Current goal: {goal}
@@ -39,7 +38,8 @@ Agent status: {status}
 Time since last action (s): {tsla}
 Screenshot meta (width x height @ dpi): {screenshot_meta}
 
-Action schema (JSON Schema): {schema}
+Example (do not describe it, just follow the structure):
+{{"actions":[{{"action":"WAIT","confidence":0.55,"rationale":"Review the scene","expected_outcome":"Next step chosen","wait_seconds":2.0}}]}}
 """
 
 
@@ -57,6 +57,8 @@ class LocalVLMPlanner:
         self.model = os.getenv(model_env, default_model)
         self.api_key = os.getenv(api_key_env, "")
         self.next_allowed_time: float = 0.0
+        self.failure_count: int = 0
+        self._request_lock = threading.Lock()
 
     def plan(
         self,
@@ -68,6 +70,10 @@ class LocalVLMPlanner:
         if self.next_allowed_time and now < self.next_allowed_time:
             wait_for = max(0.0, self.next_allowed_time - now)
             return self._fallback(f"Rate limited; retry after {wait_for:.1f}s.")
+
+        if not self._request_lock.acquire(blocking=False):
+            self.next_allowed_time = max(self.next_allowed_time, time.time() + 1.0)
+            return self._fallback("Planner busy; waiting for previous request to finish.")
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -87,19 +93,23 @@ class LocalVLMPlanner:
                 self._chat_url(),
                 headers=headers,
                 json=payload,
-                timeout=120,
+                timeout=45,
             )
             response.raise_for_status()
             content = response.json()
             text = self._extract_text(content)
             self.next_allowed_time = 0.0
+            self.failure_count = 0
             logger.warning("OLLAMA RESP status=%s", response.status_code)
 
             return self._safe_json(text)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Local VLM planning failed; returning fallback WAIT action.")
+            self.failure_count += 1
             self.next_allowed_time = time.time() + self._backoff_seconds(exc)
             return self._fallback(f"Local VLM planning failed: {exc}")
+        finally:
+            self._request_lock.release()
 
     def _chat_url(self) -> str:
         """Return the Ollama chat endpoint, normalizing away OpenAI-style suffixes."""
@@ -144,7 +154,7 @@ class LocalVLMPlanner:
             status=state.agent_status,
             tsla=state.time_since_last_action(),
             screenshot_meta=screenshot_meta or "<unknown>",
-            schema=ACTION_SCHEMA,
+            actions=", ".join(SUPPORTED_ACTIONS),
         )
 
         clean_b64 = None
@@ -156,27 +166,25 @@ class LocalVLMPlanner:
         if clean_b64:
             messages.append({
                 "role": "user",
-                "content": prompt + "\n\nAnalyze the screenshot and propose actions following the schema.",
+                "content": prompt + "\n\nAnalyze the screenshot and respond with JSON only.",
                 "images": [clean_b64],
             })
         else:
             messages.append({
                 "role": "user",
-                "content": prompt + "\n\nNo screenshot available. Provide actions using the schema.",
+                "content": prompt + "\n\nNo screenshot available. Provide actions using the same JSON format.",
             })
 
-
-        # `format: json` asks Ollama to adhere to JSON output; combined with the system prompt this
-        # helps ensure the planner returns a parsable action list.
         return {
             "model": self.model,
             "messages": messages,
             "stream": False,
             "options": {
-                "num_predict": 350,
+                "num_predict": 220,
                 "temperature": 0.0,
+                "top_p": 0.9,
+                "seed": 1,
             },
-            #"format": "json",
         }
 
     def _extract_text(self, content: Dict[str, Any]) -> str:
@@ -212,11 +220,12 @@ class LocalVLMPlanner:
         return {"actions": [action]}
 
     def _backoff_seconds(self, exc: Exception) -> float:
+        scale = min(self.failure_count, 4)
         if isinstance(exc, requests.HTTPError) and exc.response is not None:
             status = exc.response.status_code
             if status == 429 or status >= 500:
-                return 10.0
+                return min(5.0 * (2**scale), 60.0)
         message = str(exc).lower()
         if "429" in message or "rate" in message or "limit" in message:
-            return 10.0
-        return 5.0
+            return min(5.0 * (2**scale), 60.0)
+        return min(3.0 * (2**scale), 45.0)
