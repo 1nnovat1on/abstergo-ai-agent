@@ -28,6 +28,8 @@ class AgentOrchestrator:
         self.running = False
         self.thread: Optional[threading.Thread] = None
         self.lock = threading.Lock()
+        self.planning_lock = threading.Lock()
+        self.planning_inflight = False
         self.last_screenshot: Optional[Screenshot] = None
         self.last_vision_time: Optional[float] = None
         self.pending_actions: list[ActionStep] = []
@@ -132,15 +134,28 @@ class AgentOrchestrator:
                     else:
                         sleep_after_loop = 0.2
                 else:
-                    print("CALLING PLANNER", flush=True)
-                    plan_response = self.planner.plan(
-                        self.state,
-                        screenshot_b64,
-                        metadata={"screenshot_key": screenshot_key, "screenshot_meta": screenshot_meta},
-                    )
-                    self.cached_plan_key = context_key
-                    self.cached_plan_response = plan_response
-                    self.cached_plan_consumed = False
+                    should_call_planner = False
+                    with self.planning_lock:
+                        if self.planning_inflight:
+                            sleep_after_loop = 0.2
+                        else:
+                            self.planning_inflight = True
+                            should_call_planner = True
+
+                    if should_call_planner:
+                        try:
+                            print("CALLING PLANNER", flush=True)
+                            plan_response = self.planner.plan(
+                                self.state,
+                                screenshot_b64,
+                                metadata={"screenshot_key": screenshot_key, "screenshot_meta": screenshot_meta},
+                            )
+                            self.cached_plan_key = context_key
+                            self.cached_plan_response = plan_response
+                            self.cached_plan_consumed = False
+                        finally:
+                            with self.planning_lock:
+                                self.planning_inflight = False
 
                 if plan_response is not None:
                     actions = parse_actions(plan_response, min_confidence=0.55)

@@ -172,6 +172,10 @@ class LocalVLMPlanner:
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "options": {
+                "num_predict": 350,
+                "temperature": 0.0,
+            },
             "format": "json",
         }
 
