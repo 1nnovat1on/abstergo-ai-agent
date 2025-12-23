@@ -52,7 +52,12 @@ class LocalVLMPlanner:
         self.api_key = os.getenv(api_key_env, "")
         self.next_allowed_time: float = 0.0
 
-    def plan(self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def plan(
+        self,
+        state: AgentState,
+        screenshot_b64: Optional[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         now = time.time()
         if self.next_allowed_time and now < self.next_allowed_time:
             wait_for = max(0.0, self.next_allowed_time - now)
@@ -62,29 +67,30 @@ class LocalVLMPlanner:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        last_exc: Optional[Exception] = None
-        for base_url, path in self._candidate_paths():
-            try:
-                response = requests.post(f"{base_url}{path}", headers=headers, json=payload, timeout=120)
-                response.raise_for_status()
-                content = response.json()
-                text = self._extract_text(content)
-                self.next_allowed_time = 0.0
-                return self._safe_json(text)
-            except requests.HTTPError as exc:
-                last_exc = exc
-                status = exc.response.status_code if exc.response is not None else None
-                if status == 404:
-                    logger.info("Local VLM path %s returned 404; trying fallback path.", path)
-                    continue
-                break
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                break
+        # ✅ build payload (this was missing)
+        payload = self._build_payload(
+            state=state,
+            screenshot_b64=screenshot_b64,
+            metadata=metadata,
+            style="ollama",
+        )
 
-        logger.exception("Local VLM planning failed; returning fallback WAIT action.", exc_info=last_exc)
-        self.next_allowed_time = time.time() + self._backoff_seconds(last_exc) if last_exc else 5.0
-        return self._fallback(f"Local VLM planning failed: {last_exc}")
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/chat",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            content = response.json()
+            text = self._extract_text(content)
+            self.next_allowed_time = 0.0
+            return self._safe_json(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Local VLM planning failed; returning fallback WAIT action.")
+            self.next_allowed_time = time.time() + self._backoff_seconds(exc)
+            return self._fallback(f"Local VLM planning failed: {exc}")
 
     def _candidate_paths(self) -> List[tuple[str, str]]:
         """Return possible chat completion paths for OpenAI-compatible or Ollama endpoints."""
@@ -106,7 +112,7 @@ class LocalVLMPlanner:
         state: AgentState,
         screenshot_b64: Optional[str],
         metadata: Optional[Dict[str, Any]] = None,
-        style: str = "openai",
+        style: str = "ollama",
     ) -> Dict[str, Any]:
         screenshot_meta = None
         if metadata:
