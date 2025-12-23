@@ -31,9 +31,29 @@ class Screenshot:
     height: int
     dpi: tuple[float, float] = (96.0, 96.0)
 
-    def to_base64(self) -> str:
+    def downscale(self, max_side: int = 0) -> "Screenshot":
+        """Return a downscaled copy if the image exceeds the given side length."""
+
+        if not max_side or max_side <= 0:
+            return self
+
+        width, height = self.image.size
+        largest_side = max(width, height)
+        if largest_side <= max_side:
+            return self
+
+        scale = max_side / float(largest_side)
+        new_size = (
+            max(1, int(width * scale)),
+            max(1, int(height * scale)),
+        )
+        resized = self.image.resize(new_size, Image.LANCZOS)
+        return Screenshot(resized, new_size[0], new_size[1], dpi=self.dpi)
+
+    def to_base64(self, max_side: int | None = None) -> str:
+        target = self.downscale(max_side or 0)
         buffer = io.BytesIO()
-        self.image.save(buffer, format="PNG")
+        target.image.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
