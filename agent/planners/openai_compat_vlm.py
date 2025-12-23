@@ -58,7 +58,6 @@ class LocalVLMPlanner:
             wait_for = max(0.0, self.next_allowed_time - now)
             return self._fallback(f"Rate limited; retry after {wait_for:.1f}s.")
 
-        payload = self._build_payload(state, screenshot_b64, metadata)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -103,7 +102,11 @@ class LocalVLMPlanner:
         ]
 
     def _build_payload(
-        self, state: AgentState, screenshot_b64: Optional[str], metadata: Optional[Dict[str, Any]] = None
+        self,
+        state: AgentState,
+        screenshot_b64: Optional[str],
+        metadata: Optional[Dict[str, Any]] = None,
+        style: str = "openai",
     ) -> Dict[str, Any]:
         screenshot_meta = None
         if metadata:
@@ -124,6 +127,40 @@ class LocalVLMPlanner:
             screenshot_meta=screenshot_meta or "<unknown>",
             schema=ACTION_SCHEMA,
         )
+
+        if style == "ollama":
+            clean_b64 = None
+            if screenshot_b64:
+                clean_b64 = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
+
+            messages: List[Dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": prompt,
+                }
+            ]
+
+            if clean_b64:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Analyze the screenshot and propose actions following the schema.",
+                        "images": [clean_b64],
+                    }
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "No screenshot available. Provide actions using the schema.",
+                    }
+                )
+
+            return {
+                "model": self.model,
+                "messages": messages,
+                "stream": False,
+            }
 
         messages: List[Dict[str, Any]] = [
             {
@@ -162,11 +199,12 @@ class LocalVLMPlanner:
 
     def _extract_text(self, content: Dict[str, Any]) -> str:
         choices = content.get("choices") or []
-        if not choices:
-            return ""
-        message = choices[0].get("message") or {}
-        text = message.get("content") or ""
-        return text
+        if choices:
+            message = choices[0].get("message") or {}
+            return message.get("content") or ""
+
+        message = content.get("message") or {}
+        return message.get("content") or ""
 
     def _safe_json(self, text: str) -> Dict[str, Any]:
         cleaned = text.strip()
