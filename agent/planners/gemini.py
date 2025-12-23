@@ -162,9 +162,9 @@ class GeminiPlanner:
             logger.warning("Gemini response was empty; returning WAIT fallback.")
             return self._fallback("Planner returned empty response.")
 
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\n", "", cleaned)
-            cleaned = re.sub(r"```\s*$", "", cleaned)
+        if cleaned.startswith(\"'''\""):
+            cleaned = re.sub(r\"^```(?:json)?\\n\", \"\", cleaned)
+            cleaned = re.sub(r\"```\\s*$\", \"\", cleaned)
 
         # Try direct parse first
         try:
@@ -197,14 +197,14 @@ class GeminiPlanner:
         fields like ``response_mime_type``/``response_schema``. To keep the
         planner working across versions, we only pass arguments that are
         present in the detected signature.
-        """
+        \"\"\"
 
         if not GenerationConfig:
             return None
 
         desired = {
-            "response_mime_type": "application/json",
-            "response_schema": ACTION_SCHEMA,
+            \"response_mime_type\": \"application/json\",
+            \"response_schema\": ACTION_SCHEMA,
         }
 
         try:
@@ -226,5 +226,5 @@ class GeminiPlanner:
         try:
             return GenerationConfig(**supported_kwargs)
         except TypeError:
-            logger.warning("GenerationConfig rejected structured output args; continuing without.")
+            logger.warning(\"GenerationConfig rejected structured output args; continuing without.\")
             return None
