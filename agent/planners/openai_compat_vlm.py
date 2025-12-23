@@ -63,9 +63,8 @@ class LocalVLMPlanner:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         last_exc: Optional[Exception] = None
-        for style, base_url, path in self._candidate_paths():
+        for base_url, path in self._candidate_paths():
             try:
-                payload = self._build_payload(state, screenshot_b64, metadata, style)
                 response = requests.post(f"{base_url}{path}", headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 content = response.json()
@@ -75,8 +74,8 @@ class LocalVLMPlanner:
             except requests.HTTPError as exc:
                 last_exc = exc
                 status = exc.response.status_code if exc.response is not None else None
-                if status in {400, 404} and style == "openai":
-                    logger.info("Local VLM path %s returned %s; trying Ollama fallback path.", path, status)
+                if status == 404:
+                    logger.info("Local VLM path %s returned 404; trying fallback path.", path)
                     continue
                 break
             except Exception as exc:  # noqa: BLE001
@@ -87,8 +86,8 @@ class LocalVLMPlanner:
         self.next_allowed_time = time.time() + self._backoff_seconds(last_exc) if last_exc else 5.0
         return self._fallback(f"Local VLM planning failed: {last_exc}")
 
-    def _candidate_paths(self) -> List[tuple[str, str, str]]:
-        """Return possible chat completion paths and payload styles."""
+    def _candidate_paths(self) -> List[tuple[str, str]]:
+        """Return possible chat completion paths for OpenAI-compatible or Ollama endpoints."""
 
         base_no_version = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
         if self.base_url.endswith("/v1"):
@@ -98,8 +97,8 @@ class LocalVLMPlanner:
 
         # Ollama's native chat endpoint (without OpenAI compatibility) lives under /api/chat.
         return [
-            ("openai", self.base_url, openai_path),
-            ("ollama", base_no_version, "/api/chat"),
+            (self.base_url, openai_path),
+            (base_no_version, "/api/chat"),
         ]
 
     def _build_payload(
