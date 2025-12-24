@@ -4,7 +4,7 @@ import time
 from typing import List, Optional, Tuple
 
 from .actions import ActionStep, ActionTarget
-from .platform import PlatformAdapter, Screenshot
+from .platform_agent import PlatformAdapter, Screenshot
 
 
 class ActionExecutor:
