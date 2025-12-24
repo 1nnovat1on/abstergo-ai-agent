@@ -1,6 +1,10 @@
 # abstergo-ai-agent
 
 Local autonomous UI agent powered by pluggable planners (Gemini by default). The agent runs inside a simple Flask app with a single-page UI to start/stop, choose Goal vs Free Roam modes, and view live status.
+Tested successfully:
+Open Notepad
+Google 'cat photo'
+Close browser
 
 ## Features
 - Event-driven perception → decision → action loop with on-demand screenshots
