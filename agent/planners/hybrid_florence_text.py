@@ -50,9 +50,9 @@ class HybridPlanner:
         text_base_url_env: str = "TEXT_BASE_URL",
         text_model_env: str = "TEXT_MODEL",
         text_api_key_env: str = "TEXT_API_KEY",
-        default_florence_url: str = "http://127.0.0.1:8000/v1",
+        default_florence_url: str = "http://127.0.0.1:8001/v1",
         default_text_url: str = "http://127.0.0.1:11434/v1",
-        default_text_model: str = "deepseek-r1:14b",
+        default_text_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     ) -> None:
         self.florence_base_url = os.getenv(florence_base_url_env, default_florence_url).rstrip("/")
         self.florence_model = os.getenv(florence_model_env, "")
