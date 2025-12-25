@@ -101,7 +101,7 @@ class LocalVLMPlanner:
                         url,
                         headers=headers,
                         json=payload,
-                        timeout=45,
+                        timeout=500,
                     )
                     if response.status_code == 404:
                         last_error = requests.HTTPError("404 Not Found", response=response)
