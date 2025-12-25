@@ -85,24 +85,44 @@ class LocalVLMPlanner:
             metadata=metadata,
         )
 
-        try:
-            logger.warning("POSTING TO OLLAMA: %s", self._chat_url())
-            logger.warning("MODEL=%s has_image=%s b64_len=%s",
-               self.model, bool(screenshot_b64), len(screenshot_b64 or ""))
-            response = requests.post(
-                self._chat_url(),
-                headers=headers,
-                json=payload,
-                timeout=45,
-            )
-            response.raise_for_status()
-            content = response.json()
-            text = self._extract_text(content)
-            self.next_allowed_time = 0.0
-            self.failure_count = 0
-            logger.warning("OLLAMA RESP status=%s", response.status_code)
+        last_error: Optional[Exception] = None
 
-            return self._safe_json(text)
+        try:
+            for url in self._chat_urls():
+                try:
+                    logger.warning("POSTING TO VLM: %s", url)
+                    logger.warning(
+                        "MODEL=%s has_image=%s b64_len=%s",
+                        self.model,
+                        bool(screenshot_b64),
+                        len(screenshot_b64 or ""),
+                    )
+                    response = requests.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=45,
+                    )
+                    if response.status_code == 404:
+                        last_error = requests.HTTPError("404 Not Found", response=response)
+                        logger.warning("VLM endpoint 404; trying next fallback if available.")
+                        continue
+
+                    response.raise_for_status()
+                    content = response.json()
+                    text = self._extract_text(content)
+                    self.next_allowed_time = 0.0
+                    self.failure_count = 0
+                    logger.warning("VLM RESP status=%s", response.status_code)
+
+                    return self._safe_json(text)
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 404:
+                        continue
+                    raise
+
+            raise last_error or RuntimeError("Local VLM call failed without error detail")
         except Exception as exc:  # noqa: BLE001
             logger.exception("Local VLM planning failed; returning fallback WAIT action.")
             self.failure_count += 1
@@ -111,25 +131,36 @@ class LocalVLMPlanner:
         finally:
             self._request_lock.release()
 
-    def _chat_url(self) -> str:
-        """Return the Ollama chat endpoint, normalizing away OpenAI-style suffixes."""
+    def _chat_urls(self) -> list[str]:
+        """Return a list of chat endpoints to try (OpenAI-style then Ollama)."""
 
-        # Strip any trailing path segments that mimic OpenAI (e.g., /v1 or /v1/chat/completions)
-        trimmed = self.base_url
-        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
-            if trimmed.endswith(suffix):
-                trimmed = trimmed[: -len(suffix)]
-                break
+        trimmed = self.base_url.rstrip("/")
 
-        trimmed = trimmed.rstrip("/")
+        # Respect users who provide explicit OpenAI-style paths.
+        openai_url = None
+        if trimmed.endswith("/v1/chat/completions"):
+            openai_url = trimmed
+            trimmed = trimmed[: -len("/v1/chat/completions")]
+        elif trimmed.endswith("/chat/completions"):
+            openai_url = trimmed
+            trimmed = trimmed[: -len("/chat/completions")]
+        elif trimmed.endswith("/v1"):
+            openai_url = f"{trimmed}/chat/completions"
+            trimmed = trimmed[: -len("/v1")]
+        else:
+            openai_url = f"{trimmed}/v1/chat/completions"
 
-        # Respect users who already provide /api or /api/chat
+        # Respect users who already provide /api or /api/chat for Ollama.
         if trimmed.endswith("/api/chat"):
-            return trimmed
-        if trimmed.endswith("/api"):
-            return f"{trimmed}/chat"
+            ollama_url = trimmed
+        elif trimmed.endswith("/api"):
+            ollama_url = f"{trimmed}/chat"
+        else:
+            ollama_url = f"{trimmed}/api/chat"
 
-        return f"{trimmed}/api/chat"
+        if openai_url == ollama_url:
+            return [openai_url]
+        return [openai_url, ollama_url]
 
     def _build_payload(
         self,
