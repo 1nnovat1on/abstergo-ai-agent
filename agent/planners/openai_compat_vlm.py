@@ -50,7 +50,7 @@ class LocalVLMPlanner:
         model_env: str = "VLM_MODEL",
         api_key_env: str = "VLM_API_KEY",
         default_base_url: str = "http://127.0.0.1:11434",
-        default_model: str = "qwen3-vl",
+        default_model: str = "qwen3-vl:8b",
     ) -> None:
         # Ollama runs a local HTTP server; we only need the host/port, not an OpenAI-style path.
         self.base_url = os.getenv(base_url_env, default_base_url).rstrip("/")
