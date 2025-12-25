@@ -15,7 +15,7 @@ Actions tested successfully:
 - Pluggable platform adapter (pyautogui/mss when available, null adapter fallback)
 - Pluggable planners that all return the same JSON action schema:
   - **Gemini** (default) — `PLANNER_BACKEND=gemini`
-  - **Local VLM** (e.g., LLaVA via OpenAI-compatible API) — `PLANNER_BACKEND=vlm`
+  - **Local VLM** (e.g., Qwen3-VL via OpenAI-compatible API) — `PLANNER_BACKEND=vlm`
   - **Hybrid** (Florence-2 vision → text LLM for reasoning) — `PLANNER_BACKEND=hybrid`
 - Local HTML UI for control + telemetry
 
@@ -28,10 +28,10 @@ Actions tested successfully:
    - **Gemini** (structured output supported):
      - Set `GEMINI_API_KEY`
      - Optional: `GEMINI_MODEL` (default `gemini-2.5-flash`)
-   - **Local VLM** (OpenAI-compatible, e.g., LLaVA):
+   - **Local VLM** (OpenAI-compatible, e.g., Qwen3-VL):
      - Set `PLANNER_BACKEND=vlm`
      - Optional: `VLM_BASE_URL` (default `http://127.0.0.1:11434`)
-     - Optional: `VLM_MODEL` (e.g., `llava:7b`)
+     - Optional: `VLM_MODEL` (e.g., `qwen3-vl`)
      - Optional: `VLM_API_KEY` if your endpoint requires it
      - The planner first tries the OpenAI-compatible path (`/v1/chat/completions`) and falls back to Ollama's native `/api/chat` endpoint if the first call returns 404. Keep `VLM_BASE_URL` set to the root (e.g., `http://127.0.0.1:11434`) so either path works.
    - **Hybrid** (Florence-2 for vision, text LLM for reasoning):
