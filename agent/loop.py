@@ -97,7 +97,7 @@ class AgentOrchestrator:
             return None
 
     def _run_loop(self) -> None:
-        planner_max_side = 768
+        planner_max_side = 512
         while True:
             with self.lock:
                 if not self.running:

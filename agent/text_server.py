@@ -8,7 +8,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Configuration
 TEXT_MODEL = os.getenv("TEXT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
-PORT = int(os.getenv("PORT", 11434))
+PORT = int(os.getenv("PORT", 11435))
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 logging.basicConfig(level=logging.INFO)

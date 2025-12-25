@@ -50,7 +50,7 @@ class LocalVLMPlanner:
         model_env: str = "VLM_MODEL",
         api_key_env: str = "VLM_API_KEY",
         default_base_url: str = "http://127.0.0.1:11434",
-        default_model: str = "qwen3-vl:8b",
+        default_model: str = "qwen3-vl:4b",
     ) -> None:
         # Ollama runs a local HTTP server; we only need the host/port, not an OpenAI-style path.
         self.base_url = os.getenv(base_url_env, default_base_url).rstrip("/")
@@ -101,7 +101,7 @@ class LocalVLMPlanner:
                         url,
                         headers=headers,
                         json=payload,
-                        timeout=500,
+                        timeout=45,
                     )
                     if response.status_code == 404:
                         last_error = requests.HTTPError("404 Not Found", response=response)
@@ -211,10 +211,11 @@ class LocalVLMPlanner:
             "messages": messages,
             "stream": False,
             "options": {
-                "num_predict": 220,
+                "num_predict": 150,
                 "temperature": 0.0,
                 "top_p": 0.9,
                 "seed": 1,
+                "format": "json",
             },
         }
 

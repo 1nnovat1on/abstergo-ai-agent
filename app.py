@@ -104,7 +104,7 @@ def ensure_servers_running() -> List[subprocess.Popen]:
     processes.append(vision_proc)
 
     # Start Text Server
-    text_port = 11434
+    text_port = 11435
     logger.info(f"Starting Text Server on port {text_port}...")
     text_proc = subprocess.Popen(
         [sys.executable, "agent/text_server.py"],
